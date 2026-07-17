@@ -43,18 +43,11 @@ the origin you register with Google below.
      **Google Health API**, check
      `https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly`
      (this is the scope that covers the `heart-rate` data type), then press
-     **Update** and **Save**. While you're there, also add the non-sensitive
-     scope `https://www.googleapis.com/auth/userinfo.email` (search for
-     "Google OAuth2 API" or "userinfo" in the picker) — the app uses it to
-     display which account you're signed into and to name the CSV file. All
-     Health API scopes are classified as *Restricted*; if a scope is not
-     registered here, the API rejects your token with
-     `403 DISALLOWED_OAUTH_SCOPES` even though the OAuth consent popup
-     succeeds. If no Health API scopes appear in the picker, the Health API
-     isn't enabled yet — do step 2 first.
-     Note: the app requests the email with a *separate* OAuth token. The
-     Health API rejects tokens carrying scopes outside its own family, so the
-     health token must contain the `googlehealth` scope and nothing else.
+     **Update** and **Save**. All Health API scopes are classified as
+     *Restricted*; if a scope is not registered here, the API rejects your
+     token with `403 DISALLOWED_OAUTH_SCOPES` even though the OAuth consent
+     popup succeeds. If no Health API scopes appear in the picker, the Health
+     API isn't enabled yet — do step 2 first.
    - **Test users:** while the app is in *Testing* mode, add your own Google
      account as a test user. (For personal use you can stay in Testing mode
      forever; you don't need Google verification.)
@@ -69,12 +62,11 @@ the origin you register with Google below.
 
 ## 3. Use the app
 
-1. Open <http://localhost:8000/>, paste your Client ID, and click
-   **Grant access**. A Google popup will ask you to approve the heart rate
-   scope, followed by a second quick grant for your email address, which is
-   then shown next to the Access panel so you can confirm which account's
-   data you're downloading. (If your browser blocks the second popup, click
-   **Show account email**.)
+1. Open <http://localhost:8000/> and click **Grant access** (your Client ID is
+   already built into the page). A single Google popup asks you to approve the
+   heart rate scope. Optionally, type an email address into the **Email for CSV
+   filename** box — it's used only to name the downloaded file and is never sent
+   anywhere.
 2. Pick your **time zone** (defaults to your browser's zone) and a **start/end**
    date-time. You enter civil (wall-clock) time; the app converts it to
    absolute physical time in that zone before querying, because the API filters
@@ -84,11 +76,10 @@ the origin you register with Google below.
    with `pageSize=10000` (the API maximum) and follows `nextPageToken` until the
    range is complete.
 4. **Download CSV** saves the data with columns
-   `device_name, civil_time, beats_per_minute`. The filename embeds a
-   filename-safe version of your email (characters other than letters,
-   digits, `.`, `_`, `-` become `_`), e.g.
-   `heart_rate_jane.doe_gmail.com.csv`; if the email grant was skipped it
-   falls back to `heart_rate.csv`.
+   `device_name, civil_time, beats_per_minute`. If you typed an email into the
+   filename box, it's folded into a filename-safe suffix (characters other than
+   letters, digits, `.`, `_`, `-` become `_`), e.g.
+   `heart_rate_jane.doe_gmail.com.csv`; otherwise it's just `heart_rate.csv`.
 5. The **summary chart** shows a 10th–90th percentile band per 5-minute
    interval (red where the whole band is above 100 bpm, green where it is below
    90 bpm). A shaded indicator block marks the span shown in the **detail
@@ -109,6 +100,39 @@ the origin you register with Google below.
   app parses it to a number.
 - Access tokens live only in page memory and expire after about an hour;
   re-grant if a fetch returns 401.
+
+## Hosting it online (e.g. GitHub Pages)
+
+Because the app is a single static file with no backend, you can host it so it's
+usable from anywhere without a local server:
+
+1. Push `index.html` to a repo and enable **GitHub Pages**. It'll be served at
+   `https://<username>.github.io/<repo>/`.
+2. In the Cloud console, add `https://<username>.github.io` as an **Authorized
+   JavaScript origin**. Origins are scheme + host only (no path), so use the
+   bare `github.io` origin — not the `/<repo>/` path.
+3. Hardcode your client ID: set the `CLIENT_ID` constant near the top of
+   `index.html`. When set, the app uses it automatically and hides the input
+   field, so you never paste it again.
+4. Keep the OAuth app in **Testing** mode with yourself as a test user. All
+   Health scopes are *Restricted*; they work fine in Testing mode for listed
+   test users. Moving to **Production** for public use would trigger Google
+   verification, which for restricted scopes includes a paid annual third-party
+   security assessment — unnecessary for a personal tool.
+5. Once you're hosting for real, remove `http://localhost:8000` from the
+   authorized origins (or use a separate client ID for local development) so
+   nobody can run a copy under your project.
+
+### Is it safe to put the client ID in the page?
+
+Yes. The client **ID** is public by design and is meant to live in frontend
+code; only the client **secret** must stay private, and this app has no secret
+(it uses the browser-based public-client flow with PKCE). A copied client ID
+can't be used from an origin you didn't authorize, and even from an authorized
+origin every user only ever receives tokens for *their own* Google account —
+your data is never exposed. The worst a leaked client ID enables is someone
+consuming your project's API quota or showing your app's name on their consent
+screen.
 
 ## Troubleshooting
 

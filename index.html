@@ -133,7 +133,10 @@
       </div>
       <button id="grantBtn">Grant access</button>
       <span class="auth-state" id="authState" hidden>Access granted</span>
-      <button id="emailBtn" class="secondary" hidden>Show account email</button>
+      <div class="ctl" id="emailCtl">
+        <label for="emailInput">Email for CSV filename (optional)</label>
+        <input type="email" id="emailInput" placeholder="you@example.com" autocomplete="email" spellcheck="false">
+      </div>
     </div>
   </fieldset>
 
@@ -179,13 +182,18 @@
 <script>
 "use strict";
 
+/* ===================================================================
+ * HOSTING: paste your OAuth client ID between the quotes below and it
+ * will be used automatically — no need to type it in every visit. Leave
+ * it "" to fall back to the text field. It is safe to commit this value
+ * to a public repo: the client ID is public, and your Authorized
+ * JavaScript origins allowlist is what actually restricts its use.
+ * =================================================================== */
+const CLIENT_ID = "1051353496232-fq8caftedl4klv32ekgkod0nnkcas1vf.apps.googleusercontent.com";
+
 /* ============================== State ============================== */
 const API_BASE = "https://health.googleapis.com/v4/users/me/dataTypes/heart-rate/dataPoints";
 const SCOPE = "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly";
-// The email is fetched with a SEPARATE token: the Health API rejects tokens
-// that carry any scope outside its own family (403 DISALLOWED_OAUTH_SCOPES),
-// so the health token must never be mixed with identity scopes.
-const EMAIL_SCOPE = "https://www.googleapis.com/auth/userinfo.email";
 const PAGE_SIZE = 10000; // API maximum — keep pagination as large as possible.
 const FIVE_MIN = 5 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
@@ -194,8 +202,6 @@ const MIN_WINDOW = 10 * 60 * 1000;   // narrowest the window can be dragged
 
 let accessToken = null;
 let tokenClient = null;
-let emailTokenClient = null;
-let userEmail = null;
 // Each sample: { device, civil: {y,m,d,hh,mm,ss}, civilMs, bpm }
 // civilMs treats the civil wall-clock reading as if it were UTC, which gives a
 // monotonic axis in the user's own time and makes date-boundary math trivial.
@@ -205,6 +211,14 @@ let detailStartMs = null;  // detail window is [detailStartMs, detailEndMs]
 let detailEndMs = null;    // resizable by dragging the indicator edges
 
 const $ = (id) => document.getElementById(id);
+
+(function applyHardcodedClientId() {
+  if (!CLIENT_ID) return;
+  const field = $("clientId");
+  field.value = CLIENT_ID;
+  // Hardcoded — collapse the input so the panel is just a Grant button.
+  field.closest(".ctl").hidden = true;
+})();
 
 /* ============================ Time zones =========================== */
 (function populateTimeZones() {
@@ -266,7 +280,7 @@ function localInputToUtcIso(inputId, tz) {
 
 /* ============================== OAuth ============================== */
 $("grantBtn").addEventListener("click", () => {
-  const clientId = $("clientId").value.trim();
+  const clientId = CLIENT_ID || $("clientId").value.trim();
   if (!clientId) return setStatus("Enter your OAuth client ID first.", "error");
   if (!window.google || !google.accounts || !google.accounts.oauth2) {
     return setStatus("Google Identity Services has not loaded yet — check your network and retry.", "error");
@@ -292,55 +306,11 @@ $("grantBtn").addEventListener("click", () => {
       } catch {
         setStatus("Access granted. Choose a range and fetch.", "ok");
       }
-      requestEmail(clientId);
     }
   });
   // prompt:"consent" forces a fresh grant of exactly the requested scope,
   // instead of silently reusing a previous (possibly broader) grant.
   tokenClient.requestAccessToken({ prompt: "consent" });
-});
-
-// Second, independent token carrying only userinfo.email; used once against
-// the userinfo endpoint and never sent to the Health API.
-function requestEmail(clientId) {
-  emailTokenClient = google.accounts.oauth2.initTokenClient({
-    client_id: clientId,
-    scope: EMAIL_SCOPE,
-    include_granted_scopes: false,
-    callback: async (resp) => {
-      if (resp.error) return showEmailFallback();
-      try {
-        const r = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
-          headers: { Authorization: `Bearer ${resp.access_token}` }
-        });
-        const info = await r.json();
-        if (info.email) {
-          userEmail = info.email;
-          $("authState").textContent = `Access granted — ${userEmail}`;
-          $("emailBtn").hidden = true;
-        } else {
-          showEmailFallback();
-        }
-      } catch {
-        showEmailFallback();
-      }
-    },
-    error_callback: () => showEmailFallback()
-  });
-  try {
-    emailTokenClient.requestAccessToken();
-  } catch {
-    showEmailFallback();
-  }
-}
-
-// If the browser blocked the chained popup, offer a direct-click retry.
-function showEmailFallback() {
-  $("emailBtn").hidden = false;
-}
-
-$("emailBtn").addEventListener("click", () => {
-  if (emailTokenClient) emailTokenClient.requestAccessToken();
 });
 
 /* ==================== Proto3 zero-omission parsing ================== */
@@ -472,9 +442,11 @@ $("csvBtn").addEventListener("click", () => {
   const blob = new Blob([lines.join("\n") + "\n"], { type: "text/csv" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
+  // Optional email from the text box, folded into a filename-safe suffix.
   // e.g. david.eger@gmail.com -> heart_rate_david.eger_gmail.com.csv
-  const safeEmail = userEmail
-    ? "_" + userEmail.toLowerCase().replace(/[^a-z0-9._-]+/g, "_")
+  const typedEmail = $("emailInput").value.trim();
+  const safeEmail = typedEmail
+    ? "_" + typedEmail.toLowerCase().replace(/[^a-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "")
     : "";
   a.download = `heart_rate${safeEmail}.csv`;
   a.click();
