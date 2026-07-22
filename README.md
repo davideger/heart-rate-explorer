@@ -43,11 +43,17 @@ the origin you register with Google below.
      **Google Health API**, check
      `https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly`
      (this is the scope that covers the `heart-rate` data type), then press
-     **Update** and **Save**. All Health API scopes are classified as
-     *Restricted*; if a scope is not registered here, the API rejects your
-     token with `403 DISALLOWED_OAUTH_SCOPES` even though the OAuth consent
-     popup succeeds. If no Health API scopes appear in the picker, the Health
-     API isn't enabled yet — do step 2 first.
+     **Update** and **Save**. Also add
+     `https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly`,
+     which is the scope the **steps** data type lives under — the app needs
+     both. All Health API scopes are classified as *Restricted*; if a scope is
+     not registered here, the API rejects your token with
+     `403 DISALLOWED_OAUTH_SCOPES` even though the OAuth consent popup
+     succeeds. If no Health API scopes appear in the picker, the Health API
+     isn't enabled yet — do step 2 first.
+     Both scopes are in the `googlehealth` family, so they ride on a single
+     token safely; what the API rejects is a token mixing in scopes from
+     *outside* that family (such as the legacy `fitness.*` scopes).
    - **Test users:** while the app is in *Testing* mode, add your own Google
      account as a test user. (For personal use you can stay in Testing mode
      forever; you don't need Google verification.)
@@ -74,9 +80,14 @@ the origin you register with Google below.
 3. Click **Fetch heart rate**. The app queries
    `GET https://health.googleapis.com/v4/users/me/dataTypes/heart-rate/dataPoints`
    with `pageSize=10000` (the API maximum) and follows `nextPageToken` until the
-   range is complete.
+   range is complete, then does the same for
+   `dataTypes/steps/dataPoints`. The API caps heart rate queries at **14 days**,
+   which the app enforces before sending the request. If the steps call fails
+   (usually because the activity scope hasn't been granted yet), the heart rate
+   data is kept and only the activity classification is skipped.
 4. **Download CSV** saves the data with columns
-   `device_name, civil_time, beats_per_minute`. If you typed an email into the
+   `device_name, civil_time, beats_per_minute, steps_per_min, state`, where
+   `state` is empty, `exercise`, or `stress`. If you typed an email into the
    filename box, it's folded into a filename-safe suffix (characters other than
    letters, digits, `.`, `_`, `-` become `_`), e.g.
    `heart_rate_jane.doe_gmail.com.csv`; otherwise it's just `heart_rate.csv`.
@@ -88,6 +99,52 @@ the origin you register with Google below.
    window down to a 10-minute minimum — or click anywhere else to jump the
    window there. Date boundaries are marked by subtle background shading with
    a single label per date.
+
+## Exercise vs. stress classification
+
+Elevated heart rate has (at least) two very different causes, so the app uses
+the steps stream to tell them apart.
+
+1. **Cadence.** Each steps interval's count is spread across the minutes it
+   covers, giving steps-per-minute.
+2. **Bouts.** A minute at **50+ steps/min** counts as *active*. Consecutive
+   active minutes form a bout; lulls of up to 2 minutes are bridged, and bouts
+   shorter than 3 minutes are discarded so that walking to the kitchen doesn't
+   register as exercise.
+3. **Elevated runs.** Each minute's *median* bpm (robust against single
+   spurious spikes) is compared to **100 bpm**. Consecutive elevated minutes
+   form a run; dips of up to 2 minutes are bridged and runs under 2 minutes are
+   dropped.
+4. **Attribution.** Each bout projects an *influence window*: the bout itself,
+   plus 2 minutes before (heart rate leads visible movement) and **15 minutes
+   after** (it stays up during recovery). The part of an elevated run inside
+   any influence window is **exercise**; any part outside every window is
+   **stress** — the heart rate rose with no movement to explain it.
+
+Because attribution is per-portion rather than per-run, a single run can split:
+a workout that keeps you above 100 bpm for 40 minutes is *exercise* through the
+recovery window and *stress* thereafter. That boundary is the main judgement
+call in the scheme — if you'd rather attribute long cool-downs entirely to
+exercise, raise `RECOVERY`.
+
+All of the thresholds above are constants at the top of the `<script>` block
+(`ACTIVE_CADENCE`, `MIN_BOUT`, `BOUT_BRIDGE`, `LEAD_IN`, `RECOVERY`,
+`ELEVATED_BPM`, `ELEVATED_BRIDGE`, `MIN_ELEVATED`) and are meant to be tuned to
+your own physiology.
+
+### Reading the charts
+
+- A **lane beneath both charts** shows movement as a pale blue underlay, with
+  classified elevated episodes on top: solid blue for exercise, red for stress.
+- The **detail chart** additionally washes the background blue or red across
+  each episode, and draws steps-per-minute as faint bars along the bottom with
+  a dashed line at the 50 steps/min activity threshold.
+- The **daily summary** table reports, per civil day: total steps, *Active*
+  time (time spent moving), *Elevated (exercise)*, and *Elevated (stress)*.
+
+Note the distinction between *Active* and *Elevated (exercise)*: a gentle walk
+can be active without ever pushing your heart rate past 100 bpm, so the two
+columns are deliberately not the same number.
 
 ## Implementation notes
 
