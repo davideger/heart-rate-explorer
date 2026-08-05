@@ -7,6 +7,11 @@ Web API — lets you download it as CSV, and renders it in interactive charts.
 The extracted fields are: **device name**, **civil time** (your local wall-clock
 time), and **sampled BPM**.
 
+It also pulls your **steps** (to tell exercise apart from stress) and,
+optionally, the events on your **primary Google Calendar** that overlap the
+displayed range — so an unexplained spike can be read next to whatever meeting
+was running at the time.
+
 ## 1. Run a local web server
 
 Google OAuth requires the app to be served from a registered origin, so open the
@@ -35,6 +40,9 @@ the origin you register with Google below.
    **Enable**. If Google requires additional Health API developer enrollment or
    terms acceptance for your account, complete that flow when prompted — see
    <https://developers.google.com/health/get-started>.
+   *For the calendar overlay*, also enable the **Google Calendar API**
+   (`calendar-json.googleapis.com`) in the same Library. Skip this if you don't
+   want the overlay; everything else works without it.
 3. **Configure the OAuth consent screen and register the scope.** In
    *APIs & Services → OAuth consent screen* (Google Auth Platform):
    - User type: **External**, then fill in the app name and your email.
@@ -54,6 +62,13 @@ the origin you register with Google below.
      Both scopes are in the `googlehealth` family, so they ride on a single
      token safely; what the API rejects is a token mixing in scopes from
      *outside* that family (such as the legacy `fitness.*` scopes).
+   - **For the calendar overlay,** add
+     `https://www.googleapis.com/auth/calendar.events.readonly` as well. It is
+     *not* in the `googlehealth` family, which is precisely why the app never
+     puts it on the same token — see *Two tokens, on purpose* below. (If your
+     scope picker only offers the broader `calendar.readonly`, change
+     `CALENDAR_SCOPE` in `index.html` to match; the narrower one is preferred
+     because it grants read access to events only.)
    - **Test users:** while the app is in *Testing* mode, add your own Google
      account as a test user. (For personal use you can stay in Testing mode
      forever; you don't need Google verification.)
@@ -73,6 +88,11 @@ the origin you register with Google below.
    heart rate scope. Optionally, type an email address into the **Email for CSV
    filename** box — it's used only to name the downloaded file and is never sent
    anywhere.
+   To overlay your schedule, also click **Connect calendar**. That opens a
+   *second*, separate consent popup for the calendar scope — see *Two tokens,
+   on purpose*. You can connect it before or after fetching; connecting
+   afterwards backfills the events for the range already on screen without
+   re-fetching the heart rate.
 2. Pick your **time zone** (defaults to your browser's zone) and a **start/end**
    date-time. You enter civil (wall-clock) time; the app converts it to
    absolute physical time in that zone before querying, because the API filters
@@ -84,10 +104,16 @@ the origin you register with Google below.
    `dataTypes/steps/dataPoints`. The API caps heart rate queries at **14 days**,
    which the app enforces before sending the request. If the steps call fails
    (usually because the activity scope hasn't been granted yet), the heart rate
-   data is kept and only the activity classification is skipped.
+   data is kept and only the activity classification is skipped. If the
+   calendar is connected, it then calls
+   `GET https://www.googleapis.com/calendar/v3/calendars/primary/events` for
+   the same range; that call is likewise non-fatal — a failure costs you the
+   overlay, never the heart rate.
 4. **Download CSV** saves the data with columns
-   `device_name, civil_time, beats_per_minute, steps_per_min, state`, where
-   `state` is empty, `exercise`, or `stress`. If you typed an email into the
+   `device_name, civil_time, beats_per_minute, steps_per_min, state,
+   calendar_events`, where `state` is empty, `exercise`, or `stress` and
+   `calendar_events` is a `;`-separated list of the events covering that
+   sample (empty when the calendar isn't connected). If you typed an email into the
    filename box, it's folded into a filename-safe suffix (characters other than
    letters, digits, `.`, `_`, `-` become `_`), e.g.
    `heart_rate_jane.doe_gmail.com.csv`; otherwise it's just `heart_rate.csv`.
@@ -99,6 +125,64 @@ the origin you register with Google below.
    window down to a 10-minute minimum — or click anywhere else to jump the
    window there. Date boundaries are marked by subtle background shading with
    a single label per date.
+
+## Calendar overlay
+
+Steps explain *whether the body was moving*. They say nothing about why an
+otherwise still body was running at 110 bpm — that's what the calendar is for.
+
+Connecting a calendar adds:
+
+- A second **lane beneath both charts**, in purple: solid blocks for timed
+  events, a pale wash for all-day ones. The lane only appears when there are
+  events to show, so the charts keep their original proportions otherwise. In
+  the detail chart, event titles are drawn into any block wide enough to hold
+  one, and faint dashed rules mark each event's start and end so a step in the
+  trace can be lined up against the moment something began.
+- **On the calendar**, a table of the events overlapping the detail window with
+  the median and peak bpm recorded while each ran, and which kind of episode
+  (if any) it overlapped. All-day entries are listed above the table rather
+  than given rows, since they're context rather than events.
+- **Elevated episodes & possible causes**, the payoff: every elevated run in
+  the fetched range with its attribution, peak bpm, and whatever was scheduled
+  at the time.
+- The **hover tooltip** in the detail chart names the events covering that
+  sample (up to two).
+
+Two things worth knowing about how events are read:
+
+- **Overlap, not causation.** The tables pair events with episodes purely by
+  time. A 10:00 meeting that overlaps a spike is a prompt for your memory, not
+  a diagnosis.
+- **Declined invitations are dropped**, as are cancelled events. A meeting you
+  turned down didn't happen to you, so it can't explain anything.
+- Recurring events are expanded to individual instances (`singleEvents=true`),
+  and events are placed on the chart's civil-time axis using the **time zone
+  selected in the app**, not the event's own. A 12:00 New York call shows up at
+  09:00 when you're viewing Pacific time — the same place your heart rate data
+  sits.
+
+### Two tokens, on purpose
+
+The Health API rejects any access token carrying a scope from outside the
+`googlehealth` family with `403 DISALLOWED_OAUTH_SCOPES`. The calendar scope is
+emphatically outside that family, so it can never share a token with the health
+scopes. The app therefore mints two independent tokens from the same client ID —
+one per button — and each grant sets `include_granted_scopes: false` with
+`prompt=consent` so Google can't silently union them back together. That is why
+you see two consent popups, and why connecting the calendar cannot break your
+heart rate access.
+
+If you ever do end up with a contaminated token, revoke the app at
+myaccount.google.com → Security → Third-party apps and grant again; the status
+line prints each token's actual scopes after granting.
+
+### Privacy
+
+Event titles are personal data. They are fetched directly from Google to your
+browser, held in page memory, and rendered locally — the app has no backend and
+sends them nowhere. They do, however, land in the **downloaded CSV** if you
+export while the calendar is connected, so treat that file accordingly.
 
 ## Exercise vs. stress classification
 
@@ -136,6 +220,7 @@ your own physiology.
 
 - A **lane beneath both charts** shows movement as a pale blue underlay, with
   classified elevated episodes on top: solid blue for exercise, red for stress.
+  When a calendar is connected, a purple lane sits below it.
 - The **detail chart** additionally washes the background blue or red across
   each episode, and draws steps-per-minute as faint bars along the bottom with
   a dashed line at the 50 steps/min activity threshold.
@@ -215,6 +300,13 @@ screen.
      Cloud project where the Health API is enabled and the scope is
      registered. Check the project selector at the top of the Credentials
      page against the one you configured.
+- **Calendar shows "Calendar unavailable" or 403:** the Calendar API isn't
+  enabled in the project (setup step 2), or the calendar scope isn't registered
+  on the *Data Access* page (setup step 3). Fix either one, then click
+  **Connect calendar** again for a fresh token.
+- **Calendar events are empty but the fetch succeeded:** the app reads the
+  **primary** calendar of the account you consented with. Events living on a
+  secondary or subscribed calendar won't appear.
 - **403 "Could not mint UberMint from GaiaMint":** you signed in with a legacy
   Fitbit account. Sign in with a Google Account (migrate the Fitbit account
   first if needed).
